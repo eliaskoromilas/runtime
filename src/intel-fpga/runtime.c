@@ -26,6 +26,8 @@ struct _cl_compute_unit {
 
 	cl_command_queue command_queue;
 	cl_kernel kernel;
+
+	unsigned char run;
 };
 
 struct _cl_memory {
@@ -536,6 +538,10 @@ int await_buffer_copy(cl_buffer buffer) {
 }
 
 int await_compute_unit_run(cl_compute_unit compute_unit) {
+	if (!strncmp("autorun:", compute_unit->name, strlen("autorun:")) && compute_unit->run) {
+		return EXIT_SUCCESS;
+	}
+
 	return inclFinish(compute_unit->command_queue);
 }
 
@@ -593,11 +599,20 @@ cl_compute_unit create_compute_unit(cl_resource resource, const char *name) {
 		return INACCEL_FAILED;
 	}
 
-	if (!(compute_unit->kernel = inclCreateKernel(resource->program, compute_unit->name))) {
-		free(compute_unit->name);
-		free(compute_unit);
+	if (!strncmp("autorun:", compute_unit->name, strlen("autorun:"))) {
+		if (!(compute_unit->kernel = inclCreateKernel(resource->program, compute_unit->name + strlen("autorun:")))) {
+			free(compute_unit->name);
+			free(compute_unit);
 
-		return NULL;
+			return NULL;
+		}
+	} else {
+		if (!(compute_unit->kernel = inclCreateKernel(resource->program, compute_unit->name))) {
+			free(compute_unit->name);
+			free(compute_unit);
+
+			return NULL;
+		}
 	}
 
 	if (!(compute_unit->command_queue = inclCreateCommandQueue(resource->context, resource->device_id))) {
@@ -1079,10 +1094,24 @@ void release_resource(cl_resource resource) {
 }
 
 int run_compute_unit(cl_compute_unit compute_unit) {
-	return inclEnqueueTask(compute_unit->command_queue, compute_unit->kernel);
+	if (!strncmp("autorun:", compute_unit->name, strlen("autorun:")) && compute_unit->run) {
+		return EXIT_SUCCESS;
+	}
+
+	if (inclEnqueueTask(compute_unit->command_queue, compute_unit->kernel)) {
+		return EXIT_FAILURE;
+	}
+
+	compute_unit->run = 1;
+
+	return EXIT_SUCCESS;
 }
 
 int set_compute_unit_arg(cl_compute_unit compute_unit, unsigned int index, size_t size, const void *value) {
+	if (!strncmp("autorun:", compute_unit->name, strlen("autorun:")) && compute_unit->run) {
+		return EXIT_SUCCESS;
+	}
+
 	if (size) {
 		return inclSetKernelArg(compute_unit->kernel, index, size, value);
 	} else {
