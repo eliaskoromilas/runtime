@@ -36,6 +36,8 @@ struct _cl_memory {
 
 	size_t size;
 	char *type;
+
+	unsigned int channel;
 };
 
 struct _cl_resource {
@@ -54,6 +56,7 @@ struct _cl_resource {
 	cl_platform_id platform_id;
 	cl_program program;
 
+	unsigned char burst_interleaved;
 	pthread_t thread;
 	unsigned char release;
 	char *root_path;
@@ -565,7 +568,8 @@ cl_buffer create_buffer(cl_memory memory, size_t size, void *host) {
 	buffer->size = size;
 	buffer->host = host;
 
-	if (!(buffer->mem = inclCreateBuffer(memory->resource->context, CL_MEM_READ_WRITE, buffer->size, NULL))) {
+	#define CL_CHANNEL_INTELFPGA(channel) (channel << 16)
+	if (!(buffer->mem = inclCreateBuffer(memory->resource->context, CL_MEM_READ_WRITE | CL_CHANNEL_INTELFPGA(memory->channel), buffer->size, NULL))) {
 		free(buffer);
 
 		return NULL;
@@ -628,6 +632,57 @@ cl_compute_unit create_compute_unit(cl_resource resource, const char *name) {
 }
 
 cl_memory create_memory(cl_resource resource, unsigned int index) {
+	if (!resource->burst_interleaved && !strncmp("pac_a10", resource->name, strlen("pac_a10")) && index < 2) {
+		cl_memory memory = (cl_memory) calloc(1, sizeof(struct _cl_memory));
+		if (!memory) {
+			perror("Error: calloc");
+
+			return INACCEL_FAILED;
+		}
+
+		memory->resource = resource;
+		memory->index = index;
+
+		memory->size = 4294967296;
+
+		if (!(memory->type = strdup("DDR"))) {
+			perror("Error: strdup");
+
+			free(memory);
+
+			return INACCEL_FAILED;
+		}
+
+		memory->channel = index + 1;
+
+		return memory;
+	} else if (!resource->burst_interleaved && !strncmp("pac_s10", resource->name, strlen("pac_s10")) && index < 4) {
+		cl_memory memory = (cl_memory) calloc(1, sizeof(struct _cl_memory));
+		if (!memory) {
+			perror("Error: calloc");
+
+			return INACCEL_FAILED;
+		}
+
+		memory->resource = resource;
+		memory->index = index;
+
+		memory->size = 8589934592;
+
+		if (!(memory->type = strdup("DDR"))) {
+			perror("Error: strdup");
+
+			free(memory);
+
+			return INACCEL_FAILED;
+		}
+
+		memory->channel = index + 1;
+
+		return memory;
+	} else if (!resource->burst_interleaved) {
+		return INACCEL_FAILED;
+	}
 	if (!index) {
 		cl_memory memory = (cl_memory) calloc(1, sizeof(struct _cl_memory));
 		if (!memory) {
@@ -1050,6 +1105,12 @@ int program_resource_with_binary(cl_resource resource, size_t size, const void *
 		resource->program = NULL;
 
 		return EXIT_FAILURE;
+	}
+
+	if (strstr((const char *) binary, "no-interleaving") {
+		resource->burst_interleaved = 0;
+	} else {
+		resource->burst_interleaved = 1;
 	}
 
 	return EXIT_SUCCESS;
